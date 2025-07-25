@@ -49,11 +49,16 @@ const userSchema = new mongoose.Schema(
       default:
         "https://www.pnrao.com/wp-content/uploads/2023/06/dummy-user-male.jpg",
       validate(value) {
-        if (!validator.isURL(value)) {
-          throw new Error("Invalid photo url" + value);
+        const isValid =
+          validator.isURL(value, { require_protocol: true }) ||
+          value.startsWith("http://localhost") ||
+          value.startsWith("https://localhost");
+        if (!isValid) {
+          throw new Error("Invalid photo url: " + value);
         }
       },
     },
+
     about: {
       type: String,
       default: "This ia the default about of the user!",
