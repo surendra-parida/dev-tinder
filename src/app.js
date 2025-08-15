@@ -3,6 +3,9 @@ const app = express();
 const path = require("path");
 const fs = require("fs");
 const cors = require("cors");
+const http = require("http");
+const initialiseSocket = require("./utils/socket");
+
 const cookieParser = require("cookie-parser");
 const connectDB = require("./config/database");
 
@@ -27,10 +30,12 @@ app.use("/", profileRouter);
 app.use("/", requestRouter);
 app.use("/", userRouter);
 
+const server = http.createServer(app);
+initialiseSocket(server);
 connectDB()
   .then(() => {
     console.log("Connection established successfully");
-    app.listen(3000, () => {
+    server.listen(3000, () => {
       console.log("Server is running on port 3000");
     });
   })
