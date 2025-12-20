@@ -2,6 +2,7 @@ const socketIO = require("socket.io");
 const crypto = require("crypto");
 const cookie = require("cookie");
 const jwt = require("jsonwebtoken");
+const { Chat } = require("../model/chat");
 
 const getSecretRoomId = (userId, targetUserId) => {
   return crypto
@@ -51,10 +52,29 @@ const initialiseSocket = (server) => {
       socket.join(roomId);
     });
 
-    socket.on("sendMessage", ({ targetUserId, text }) => {
+    socket.on("sendMessage", async ({ targetUserId, text }) => {
+      console.log(socket);
       const roomId = getSecretRoomId(socket.userId, targetUserId);
+      try {
+        let chat = await Chat.findOne({
+          participants: { $all: [socket.userId, targetUserId] },
+        });
+        if (!chat) {
+          chat = new Chat({
+            participants: [socket.userId, targetUserId],
+            messages: [],
+          });
+        }
+        chat.messages.push({
+          senderId: socket.userId,
+          text,
+        });
+        await chat.save();
+      } catch (error) {
+        console.log(error);
+      }
       io.to(roomId).emit("messageRecieved", {
-        firstName: socket.user.firstName,
+        senderId: socket.userId,
         text,
       });
     });
