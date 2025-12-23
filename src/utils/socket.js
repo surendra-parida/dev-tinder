@@ -1,8 +1,9 @@
 const socketIO = require("socket.io");
 const crypto = require("crypto");
-const cookie = require("cookie");
-const jwt = require("jsonwebtoken");
 const { Chat } = require("../model/chat");
+const socketAuthMiddleware = require("../middlewares/socketAuth");
+
+const onlineUsers = new Map();
 
 const getSecretRoomId = (userId, targetUserId) => {
   return crypto
@@ -19,68 +20,72 @@ const initialiseSocket = (server) => {
     },
   });
 
-  io.use((socket, next) => {
-    try {
-      const cookieHeader = socket.request.headers.cookie;
-      if (!cookieHeader) {
-        return next(new Error("Unauthorized"));
-      }
-
-      const cookies = cookie.parse(cookieHeader);
-      const token = cookies.token;
-
-      if (!token) {
-        return next(new Error("Unauthorized"));
-      }
-
-      const decoded = jwt.verify(token, "DEV@Tinder$790");
-
-      socket.userId = decoded._id;
-      socket.user = decoded;
-
-      next();
-    } catch (err) {
-      next(new Error("Unauthorized"));
-    }
-  });
+  io.use(socketAuthMiddleware);
 
   io.on("connection", (socket) => {
-    console.log("Authenticated socket:", socket.userId);
+    onlineUsers.set(socket.userId, socket.id);
 
-    socket.on("joinChat", ({ targetUserId }) => {
+    socket.emit("onlineUsers", Array.from(onlineUsers.keys()));
+
+    socket.broadcast.emit("userStatus", {
+      userId: socket.userId,
+      isOnline: true,
+    });
+
+    socket.on("joinChat", async ({ targetUserId }) => {
       const roomId = getSecretRoomId(socket.userId, targetUserId);
       socket.join(roomId);
+
+      await Chat.updateOne(
+        { participants: { $all: [socket.userId, targetUserId] } },
+        { $set: { "messages.$[elem].seen": true } },
+        { arrayFilters: [{ "elem.senderId": targetUserId }] }
+      );
+
+      io.to(roomId).emit("messageSeen", {
+        seenBy: socket.userId,
+      });
     });
 
     socket.on("sendMessage", async ({ targetUserId, text }) => {
-      console.log(socket);
       const roomId = getSecretRoomId(socket.userId, targetUserId);
-      try {
-        let chat = await Chat.findOne({
-          participants: { $all: [socket.userId, targetUserId] },
+      const isTargetOnline = onlineUsers.has(targetUserId);
+
+      let chat = await Chat.findOne({
+        participants: { $all: [socket.userId, targetUserId] },
+      });
+
+      if (!chat) {
+        chat = new Chat({
+          participants: [socket.userId, targetUserId],
+          messages: [],
         });
-        if (!chat) {
-          chat = new Chat({
-            participants: [socket.userId, targetUserId],
-            messages: [],
-          });
-        }
-        chat.messages.push({
-          senderId: socket.userId,
-          text,
-        });
-        await chat.save();
-      } catch (error) {
-        console.log(error);
       }
+
+      chat.messages.push({
+        senderId: socket.userId,
+        text,
+        seen: isTargetOnline,
+      });
+
+      await chat.save();
+
       io.to(roomId).emit("messageRecieved", {
         senderId: socket.userId,
         text,
+        createdAt: new Date(),
+        seen: isTargetOnline,
       });
     });
 
     socket.on("disconnect", () => {
-      console.log("User disconnected:", socket.userId);
+      onlineUsers.delete(socket.userId);
+
+      socket.broadcast.emit("userStatus", {
+        userId: socket.userId,
+        isOnline: false,
+        lastSeen: new Date(),
+      });
     });
   });
 };
